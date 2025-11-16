@@ -1378,7 +1378,29 @@ class InstagramDownloader:
             await context.route('**/pagead/**', lambda route: route.abort())
 
             page = await context.new_page()
-            
+
+            # CRITICAL: Add proper headers to API requests to bypass bot detection
+            async def handle_route(route):
+                """Inject proper headers into API requests"""
+                request = route.request
+
+                # Only modify API requests to fastdl.app backend
+                if 'api-wh.fastdl.app' in request.url or 'fastdl.app' in request.url:
+                    headers = {
+                        **request.headers,
+                        'Origin': 'https://fastdl.app',
+                        'Referer': 'https://fastdl.app/',
+                        'Sec-Fetch-Dest': 'empty',
+                        'Sec-Fetch-Mode': 'cors',
+                        'Sec-Fetch-Site': 'same-site',
+                    }
+                    await route.continue_(headers=headers)
+                else:
+                    await route.continue_()
+
+            # Route all requests through our handler
+            await page.route('**/*', handle_route)
+
             async with aiohttp.ClientSession() as session:
                 current_row = start_row
                 processed_count = 0

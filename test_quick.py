@@ -171,7 +171,25 @@ async def quick_test():
         await context.route('**/pagead/**', lambda route: route.abort())
 
         page = await context.new_page()
-        
+
+        # Add proper headers to API requests
+        async def handle_route(route):
+            request = route.request
+            if 'api-wh.fastdl.app' in request.url or 'fastdl.app' in request.url:
+                headers = {
+                    **request.headers,
+                    'Origin': 'https://fastdl.app',
+                    'Referer': 'https://fastdl.app/',
+                    'Sec-Fetch-Dest': 'empty',
+                    'Sec-Fetch-Mode': 'cors',
+                    'Sec-Fetch-Site': 'same-site',
+                }
+                await route.continue_(headers=headers)
+            else:
+                await route.continue_()
+
+        await page.route('**/*', handle_route)
+
         async with aiohttp.ClientSession() as session:
             for row, username in test_usernames:
                 print(f"\nTesting @{username} (row {row})...")
