@@ -211,7 +211,7 @@ class AIAnalyzer:
                 return False
 
             progress = f"[{image_number}/{total_images}] " if image_number and total_images else ""
-            logger.info(f"{progress}🔍 Starting {self.model_type.upper()} analysis: {image_path.name}")
+            logger.debug(f"{progress}🔍 Starting {self.model_type.upper()} analysis: {image_path.name}")
 
             max_retries = 3
             retry_delay = 2
@@ -224,7 +224,7 @@ class AIAnalyzer:
                         has_swimwear = await self.analyze_image_gemini(image_path)
 
                     result_emoji = "✓ SWIMWEAR" if has_swimwear else "✗ NO SWIMWEAR"
-                    logger.info(f"{progress}✅ {self.model_type.upper()} Result: {result_emoji}")
+                    logger.debug(f"{progress}✅ {self.model_type.upper()} Result: {result_emoji}")
                     return has_swimwear
 
                 except asyncio.CancelledError:
@@ -357,15 +357,18 @@ class InstagramDownloader:
 
         for i, (filepath, task) in enumerate(downloaded_images, 1):
             try:
-                logger.info(f"⏳ [{i}/{total_images}] Waiting for analysis: {filepath.name}")
                 has_swimwear = await task
                 successful_analyses += 1
 
                 if has_swimwear:
                     swimwear_count += 1
-                    logger.info(f"    ✅ SWIMWEAR DETECTED!")
+                    logger.info(f"🏊 [{i}/{total_images}] SWIMWEAR DETECTED in {filepath.name}")
                 else:
-                    logger.info(f"    ❌ No swimwear")
+                    logger.debug(f"❌ [{i}/{total_images}] No swimwear in {filepath.name}")
+
+                # Progress update every 3 images or at the end
+                if i % 3 == 0 or i == total_images:
+                    logger.info(f"📈 Analysis Progress: {i}/{total_images} completed, {swimwear_count} swimwear found so far")
 
             except asyncio.CancelledError:
                 logger.warning(f"[{i}/{total_images}] Analysis was cancelled for {filepath.name}")
@@ -439,13 +442,15 @@ class InstagramDownloader:
         await asyncio.sleep(wait_time)
 
     async def collect_all_post_links(self, page, max_posts):
-        """Avval barcha post linklarini to'plash - TEZKOR!"""
-        logger.info(f"🔍 Collecting up to {max_posts} post links (fast scroll mode)...")
+        """Avval barcha post linklarini to'plash - ULTRA TEZKOR!"""
+        logger.info(f"🔍 Collecting up to {max_posts} post links (TURBO scroll mode)...")
 
         all_links = []
         processed_post_captions = set()
         scroll_attempts = 0
-        max_scroll_attempts = 15
+        max_scroll_attempts = 20
+        previous_count = 0
+        stale_scroll_count = 0
 
         while len(all_links) < max_posts and scroll_attempts < max_scroll_attempts:
             posts = await page.locator('.profile-media-list__item').all()
@@ -480,30 +485,55 @@ class InstagramDownloader:
 
                     processed_post_captions.add(post_identifier)
                     all_links.append(download_link)
-                    logger.debug(f"✓ Link {len(all_links)}/{max_posts} collected")
 
                 except Exception as e:
                     logger.debug(f"Error collecting link: {e}")
                     continue
 
+            # Real-time progress logging
+            current_count = len(all_links)
+            if current_count != previous_count:
+                logger.info(f"📊 Progress: {current_count}/{max_posts} posts collected (+{current_count - previous_count} new)")
+                previous_count = current_count
+                stale_scroll_count = 0
+            else:
+                stale_scroll_count += 1
+
             if len(all_links) < max_posts:
-                logger.debug(f"Scrolling for more posts... ({len(all_links)}/{max_posts} collected)")
+                # Smart scroll strategy
                 current_scroll = await page.evaluate('window.pageYOffset')
-                target_scroll = current_scroll + 1200
-                await page.evaluate(f'window.scrollTo({{top: {target_scroll}, behavior: "smooth"}})')
-                await asyncio.sleep(1.5)
+
+                # Bigger scroll jumps for faster loading
+                scroll_distance = 1500 if stale_scroll_count < 2 else 800
+                target_scroll = current_scroll + scroll_distance
+
+                # Use instant scroll instead of smooth for speed
+                await page.evaluate(f'window.scrollTo({{top: {target_scroll}, behavior: "instant"}})')
+
+                # Adaptive wait time - faster if posts are loading
+                if stale_scroll_count == 0:
+                    # Posts are loading fast, minimal wait
+                    await asyncio.sleep(0.3)
+                elif stale_scroll_count == 1:
+                    # Slowing down, wait a bit more
+                    await asyncio.sleep(0.6)
+                else:
+                    # No new posts, wait longer for page to load
+                    await asyncio.sleep(1.0)
+                    if stale_scroll_count > 3:
+                        logger.info(f"⚠️  No new posts after {stale_scroll_count} scrolls, might be end of content")
+                        break
+
                 scroll_attempts += 1
             else:
                 break
 
-        logger.info(f"✅ Collected {len(all_links)} links in total")
+        logger.info(f"✅ Collection complete! {len(all_links)} links ready for parallel download")
         return all_links
 
     async def download_and_analyze_single(self, session, url, filepath, img_number, total_images):
-        """Bitta rasmni yuklab olish va analiz qilish - PARALLEL"""
+        """Bitta rasmni yuklab olish va analiz qilish - ULTRA PARALLEL"""
         try:
-            logger.info(f"📥 [{img_number}/{total_images}] Downloading: {filepath.name}")
-
             if not isinstance(filepath, Path):
                 filepath = Path(filepath)
 
@@ -513,7 +543,7 @@ class InstagramDownloader:
             try:
                 parent_dir.mkdir(parents=True, exist_ok=True)
             except Exception as mkdir_error:
-                logger.error(f"✗ Failed to create directory: {mkdir_error}")
+                logger.error(f"✗ [{img_number}/{total_images}] Failed to create directory: {mkdir_error}")
                 return None, False
 
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as response:
@@ -521,9 +551,9 @@ class InstagramDownloader:
                     async with aiofiles.open(filepath, 'wb') as f:
                         await f.write(await response.read())
                     file_size = filepath.stat().st_size / 1024
-                    logger.info(f"✅ [{img_number}/{total_images}] Downloaded {filepath.name} ({file_size:.1f} KB)")
+                    logger.debug(f"✅ [{img_number}/{total_images}] Downloaded {filepath.name} ({file_size:.1f} KB)")
 
-                    logger.info(f"🤖 [{img_number}/{total_images}] Starting AI analysis...")
+                    # Start AI analysis immediately without extra logging
                     analysis_task = asyncio.create_task(
                         self.ai_analyzer.detect_swimwear(filepath, img_number, total_images)
                     )
@@ -661,19 +691,32 @@ class InstagramDownloader:
             downloaded_images = []
             skipped_videos = 0
 
-            semaphore = asyncio.Semaphore(5)
+            # Increased parallelism for MAXIMUM SPEED! 🚀
+            semaphore = asyncio.Semaphore(10)
+            completed_tasks = 0
+            lock = asyncio.Lock()
 
             async def download_with_semaphore(url, img_number):
+                nonlocal completed_tasks
                 async with semaphore:
                     filename = f"img_{img_number:03d}.jpg"
                     filepath = user_folder / filename
-                    return await self.download_and_analyze_single(session, url, filepath, img_number, total_links)
+                    result = await self.download_and_analyze_single(session, url, filepath, img_number, total_links)
+
+                    # Real-time progress update
+                    async with lock:
+                        completed_tasks += 1
+                        if completed_tasks % 3 == 0 or completed_tasks == total_links:
+                            logger.info(f"⚡ PARALLEL Progress: {completed_tasks}/{total_links} downloads completed!")
+
+                    return result
 
             download_tasks = [
                 download_with_semaphore(url, i+1)
                 for i, url in enumerate(all_links)
             ]
 
+            logger.info(f"🚀 Launching {total_links} parallel download+AI tasks with 10 concurrent workers!")
             results = await asyncio.gather(*download_tasks, return_exceptions=True)
 
             downloaded_count = 0
