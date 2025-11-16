@@ -122,7 +122,7 @@ class ProxyManager:
 class AIAnalyzer:
     def __init__(self, model_type='openai'):
         self.model_type = model_type.lower()
-        
+
         if self.model_type == 'openai':
             if not OPENAI_API_KEY:
                 raise ValueError("OpenAI API key not found")
@@ -140,6 +140,64 @@ class AIAnalyzer:
                 logger.info("Using experimental model - FREE but may change in future")
         else:
             raise ValueError(f"Invalid model type: {model_type}. Choose 'openai' or 'gemini'")
+
+    async def analyze_image_from_url_openai(self, image_url):
+        """Analyze image directly from URL using OpenAI"""
+        response = await self.openai_client.chat.completions.create(
+            model=self.model_name,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Does this image contain swimwear, bikini, or swimming suit? This includes both people wearing swimwear and just the swimwear items themselves. Answer with only 'YES' or 'NO'."
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": image_url
+                            }
+                        }
+                    ]
+                }
+            ],
+        )
+        answer = response.choices[0].message.content.strip().upper()
+        return "YES" in answer
+
+    async def analyze_image_from_url_gemini(self, image_url):
+        """Analyze image directly from URL using Gemini"""
+        try:
+            import PIL.Image
+            import io
+            import aiohttp
+
+            # Download image temporarily to memory (not disk!)
+            async with aiohttp.ClientSession() as session:
+                async with session.get(image_url, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                    if response.status == 200:
+                        image_data = await response.read()
+                        img = PIL.Image.open(io.BytesIO(image_data))
+                    else:
+                        logger.error(f"Failed to fetch image from URL: HTTP {response.status}")
+                        return False
+
+            prompt = "Does this image contain swimwear, bikini, or swimming suit? This includes both people wearing swimwear and just the swimwear items themselves. Answer with only 'YES' or 'NO'."
+
+            response = await asyncio.to_thread(
+                self.gemini_model.generate_content,
+                [prompt, img]
+            )
+
+            answer = response.text.strip().upper()
+            has_swimwear = "YES" in answer
+
+            logger.debug(f"Gemini raw response: {answer}")
+            return has_swimwear
+        except Exception as e:
+            logger.error(f"Gemini URL analysis error: {e}")
+            return False
 
     def encode_image_to_base64(self, image_path):
         try:
@@ -200,6 +258,44 @@ class AIAnalyzer:
             logger.error(f"Gemini analysis error: {e}")
             return False
 
+    async def detect_swimwear_from_url(self, image_url, image_number=None, total_images=None):
+        """Analyze image directly from URL (NO DOWNLOAD!)"""
+        try:
+            progress = f"[{image_number}/{total_images}] " if image_number and total_images else ""
+            logger.debug(f"{progress}🔍 Starting {self.model_type.upper()} URL analysis")
+
+            max_retries = 3
+            retry_delay = 2
+
+            for attempt in range(max_retries):
+                try:
+                    if self.model_type == 'openai':
+                        has_swimwear = await self.analyze_image_from_url_openai(image_url)
+                    else:
+                        has_swimwear = await self.analyze_image_from_url_gemini(image_url)
+
+                    result_emoji = "✓ SWIMWEAR" if has_swimwear else "✗ NO SWIMWEAR"
+                    logger.debug(f"{progress}✅ {self.model_type.upper()} Result: {result_emoji}")
+                    return has_swimwear
+
+                except asyncio.CancelledError:
+                    logger.warning(f"{progress}Analysis cancelled for URL")
+                    raise
+                except Exception as api_error:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"{progress}{self.model_type.upper()} API error (attempt {attempt + 1}/{max_retries}): {api_error}, retrying...")
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 2
+                    else:
+                        logger.error(f"{progress}{self.model_type.upper()} API error after {max_retries} attempts: {api_error}")
+                        raise
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"Error analyzing URL: {e}")
+            return False
+
     async def detect_swimwear(self, image_path, image_number=None, total_images=None):
         try:
             if not image_path.exists():
@@ -211,7 +307,7 @@ class AIAnalyzer:
                 return False
 
             progress = f"[{image_number}/{total_images}] " if image_number and total_images else ""
-            logger.info(f"{progress}🔍 Starting {self.model_type.upper()} analysis: {image_path.name}")
+            logger.debug(f"{progress}🔍 Starting {self.model_type.upper()} analysis: {image_path.name}")
 
             max_retries = 3
             retry_delay = 2
@@ -224,7 +320,7 @@ class AIAnalyzer:
                         has_swimwear = await self.analyze_image_gemini(image_path)
 
                     result_emoji = "✓ SWIMWEAR" if has_swimwear else "✗ NO SWIMWEAR"
-                    logger.info(f"{progress}✅ {self.model_type.upper()} Result: {result_emoji}")
+                    logger.debug(f"{progress}✅ {self.model_type.upper()} Result: {result_emoji}")
                     return has_swimwear
 
                 except asyncio.CancelledError:
@@ -340,42 +436,119 @@ class InstagramDownloader:
         except:
             return 0
 
-    async def analyze_images_parallel(self, downloaded_images, username):
-        if not downloaded_images:
-            logger.warning(f"No images to analyze for @{username}")
+    async def analyze_images_batch_from_urls(self, image_urls, username):
+        """PHASE 2: Barcha URL larni to'g'ridan-to'g'ri AI ga yuborish (NO DOWNLOAD!)"""
+        if not image_urls:
+            logger.warning(f"No image URLs to analyze for @{username}")
             return 0, 0
 
-        total_images = len(downloaded_images)
+        total_images = len(image_urls)
         logger.info(f"\n{'='*60}")
-        logger.info(f"📊 Collecting {AI_MODEL.upper()} analysis results for @{username}")
-        logger.info(f"Total images: {total_images}")
+        logger.info(f"🤖 PHASE 2: Direct URL → AI analysis for @{username}")
+        logger.info(f"📊 Total images: {total_images}")
+        logger.info(f"⚡ NO DOWNLOAD! Sending URLs directly to {AI_MODEL.upper()}...")
         logger.info(f"{'='*60}\n")
 
+        # Launch all AI tasks in parallel (URL → AI)
+        analysis_tasks = []
+        for i, image_url in enumerate(image_urls, 1):
+            task = asyncio.create_task(
+                self.ai_analyzer.detect_swimwear_from_url(image_url, i, total_images)
+            )
+            analysis_tasks.append((image_url, task))
+
+        logger.info(f"✅ Launched {total_images} parallel AI analysis tasks (URL → AI)!")
+        logger.info(f"⏳ Waiting for {AI_MODEL.upper()} results...\n")
+
+        # Collect results
         swimwear_count = 0
         successful_analyses = 0
         failed_analyses = 0
 
-        for i, (filepath, task) in enumerate(downloaded_images, 1):
+        for i, (image_url, task) in enumerate(analysis_tasks, 1):
             try:
-                logger.info(f"⏳ [{i}/{total_images}] Waiting for analysis: {filepath.name}")
                 has_swimwear = await task
                 successful_analyses += 1
 
                 if has_swimwear:
                     swimwear_count += 1
-                    logger.info(f"    ✅ SWIMWEAR DETECTED!")
+                    logger.info(f"🏊 [{i}/{total_images}] SWIMWEAR DETECTED")
                 else:
-                    logger.info(f"    ❌ No swimwear")
+                    logger.debug(f"❌ [{i}/{total_images}] No swimwear")
+
+                # Progress update every 3 images or at the end
+                if i % 3 == 0 or i == total_images:
+                    logger.info(f"📈 AI Progress: {i}/{total_images} analyzed, {swimwear_count} swimwear found")
+
+            except asyncio.CancelledError:
+                logger.warning(f"[{i}/{total_images}] Analysis was cancelled")
+                failed_analyses += 1
+            except Exception as e:
+                logger.error(f"[{i}/{total_images}] Error in AI analysis: {e}")
+                failed_analyses += 1
+
+        logger.info(f"\n{'-'*60}")
+        logger.info(f"📈 AI Analysis Summary for @{username}:")
+        logger.info(f"  🏊 Swimwear detected: {swimwear_count}/{total_images}")
+        logger.info(f"  ✅ Successful: {successful_analyses}")
+        logger.info(f"  ❌ Failed: {failed_analyses}")
+        logger.info(f"{'-'*60}\n")
+
+        return swimwear_count, total_images
+
+    async def analyze_images_batch(self, image_filepaths, username):
+        """PHASE 3: Barcha rasmlarni parallel AI ga yuborish (BATCH) - OLD VERSION"""
+        if not image_filepaths:
+            logger.warning(f"No images to analyze for @{username}")
+            return 0, 0
+
+        total_images = len(image_filepaths)
+        logger.info(f"\n{'='*60}")
+        logger.info(f"🤖 PHASE 3: Starting BATCH AI analysis for @{username}")
+        logger.info(f"📊 Total images: {total_images}")
+        logger.info(f"🚀 Sending all {total_images} images to {AI_MODEL.upper()} in parallel...")
+        logger.info(f"{'='*60}\n")
+
+        # Launch all AI tasks in parallel
+        analysis_tasks = []
+        for i, filepath in enumerate(image_filepaths, 1):
+            task = asyncio.create_task(
+                self.ai_analyzer.detect_swimwear(filepath, i, total_images)
+            )
+            analysis_tasks.append((filepath, task))
+
+        logger.info(f"✅ Launched {total_images} parallel AI analysis tasks!")
+        logger.info(f"⏳ Waiting for {AI_MODEL.upper()} results...\n")
+
+        # Collect results
+        swimwear_count = 0
+        successful_analyses = 0
+        failed_analyses = 0
+
+        for i, (filepath, task) in enumerate(analysis_tasks, 1):
+            try:
+                has_swimwear = await task
+                successful_analyses += 1
+
+                if has_swimwear:
+                    swimwear_count += 1
+                    logger.info(f"🏊 [{i}/{total_images}] SWIMWEAR DETECTED in {filepath.name}")
+                else:
+                    logger.debug(f"❌ [{i}/{total_images}] No swimwear in {filepath.name}")
+
+                # Progress update every 3 images or at the end
+                if i % 3 == 0 or i == total_images:
+                    logger.info(f"📈 AI Progress: {i}/{total_images} analyzed, {swimwear_count} swimwear found")
 
             except asyncio.CancelledError:
                 logger.warning(f"[{i}/{total_images}] Analysis was cancelled for {filepath.name}")
                 failed_analyses += 1
             except Exception as e:
-                logger.error(f"[{i}/{total_images}] Error getting analysis result for {filepath.name}: {e}")
+                logger.error(f"[{i}/{total_images}] Error in AI analysis for {filepath.name}: {e}")
                 failed_analyses += 1
 
         logger.info(f"\n{'-'*60}")
-        logger.info(f"📈 Analysis Summary for @{username}:")
+        logger.info(f"📈 AI Analysis Summary for @{username}:")
         logger.info(f"  🏊 Swimwear detected: {swimwear_count}/{total_images}")
         logger.info(f"  ✅ Successful: {successful_analyses}")
         logger.info(f"  ❌ Failed: {failed_analyses}")
@@ -439,71 +612,116 @@ class InstagramDownloader:
         await asyncio.sleep(wait_time)
 
     async def collect_all_post_links(self, page, max_posts):
-        """Avval barcha post linklarini to'plash - TEZKOR!"""
-        logger.info(f"🔍 Collecting up to {max_posts} post links (fast scroll mode)...")
+        """Avval barcha post linklarini to'plash - SUPER OPTIMIZED!"""
+        logger.info(f"🔍 Collecting up to {max_posts} post links (ULTRA-FAST scroll mode)...")
 
         all_links = []
-        processed_post_captions = set()
+        processed_post_indices = set()
         scroll_attempts = 0
-        max_scroll_attempts = 15
+        max_scroll_attempts = 20
+        previous_links_count = 0
+        stale_scroll_count = 0
+        last_processed_index = 0
 
         while len(all_links) < max_posts and scroll_attempts < max_scroll_attempts:
+            # Get all posts currently on page
             posts = await page.locator('.profile-media-list__item').all()
+            total_posts_on_page = len(posts)
 
-            for post in posts:
+            # OPTIMIZATION: Only process NEW posts (not already processed)
+            new_posts_found = 0
+            for idx in range(last_processed_index, total_posts_on_page):
+                # Stop immediately if we have enough links
                 if len(all_links) >= max_posts:
+                    logger.info(f"🎯 Target reached! Got {len(all_links)}/{max_posts} posts")
                     break
 
+                # Skip if already processed
+                if idx in processed_post_indices:
+                    continue
+
+                post = posts[idx]
+                processed_post_indices.add(idx)
+
                 try:
+                    # Get unique post identifier (time is most reliable)
+                    try:
+                        time_elem = await post.locator('.media-content__meta-time').get_attribute('title')
+                        post_identifier = time_elem
+                    except:
+                        post_identifier = f"post_{idx}"
+
+                    # Get download link
                     video_tag = await post.locator('.tags__item--video').count()
                     is_video = video_tag > 0
 
                     if is_video:
                         download_link = await post.locator('img.media-content__image').get_attribute('src')
-                        if not download_link:
-                            continue
                     else:
                         download_link = await post.locator('a.button__download').get_attribute('href')
 
                     if not download_link:
+                        logger.debug(f"No download link for post {idx}")
                         continue
 
-                    try:
-                        caption_elem = await post.locator('.media-content__caption').text_content()
-                        time_elem = await post.locator('.media-content__meta-time').get_attribute('title')
-                        post_identifier = f"{caption_elem[:50]}_{time_elem}"
-                    except:
-                        post_identifier = download_link[:100]
-
-                    if post_identifier in processed_post_captions:
-                        continue
-
-                    processed_post_captions.add(post_identifier)
                     all_links.append(download_link)
-                    logger.debug(f"✓ Link {len(all_links)}/{max_posts} collected")
+                    new_posts_found += 1
+                    logger.debug(f"✓ Link {len(all_links)}/{max_posts} collected from post {idx}")
 
                 except Exception as e:
-                    logger.debug(f"Error collecting link: {e}")
+                    logger.debug(f"Error collecting link from post {idx}: {e}")
                     continue
 
+            # Update last processed index
+            last_processed_index = total_posts_on_page
+
+            # Check if we got enough links
+            if len(all_links) >= max_posts:
+                logger.info(f"✅ Collection complete! Got {len(all_links)} posts")
+                break
+
+            # Real-time progress logging
+            current_count = len(all_links)
+            if current_count != previous_links_count:
+                logger.info(f"📊 Progress: {current_count}/{max_posts} posts collected (+{current_count - previous_links_count} new) | {total_posts_on_page} posts on page")
+                previous_links_count = current_count
+                stale_scroll_count = 0
+            else:
+                stale_scroll_count += 1
+
+            # Smart scroll decision
             if len(all_links) < max_posts:
-                logger.debug(f"Scrolling for more posts... ({len(all_links)}/{max_posts} collected)")
+                # Check if we need more posts
+                if stale_scroll_count > 2:
+                    logger.info(f"⚠️  No new links after {stale_scroll_count} scrolls. Stopping (might be end of content)")
+                    break
+
+                # Calculate scroll
                 current_scroll = await page.evaluate('window.pageYOffset')
-                target_scroll = current_scroll + 1200
-                await page.evaluate(f'window.scrollTo({{top: {target_scroll}, behavior: "smooth"}})')
-                await asyncio.sleep(1.5)
+                scroll_distance = 1500 if stale_scroll_count < 2 else 800
+                target_scroll = current_scroll + scroll_distance
+
+                # Instant scroll
+                await page.evaluate(f'window.scrollTo({{top: {target_scroll}, behavior: "instant"}})')
+
+                # Adaptive wait time
+                if stale_scroll_count == 0:
+                    await asyncio.sleep(0.25)
+                elif stale_scroll_count == 1:
+                    await asyncio.sleep(0.5)
+                else:
+                    await asyncio.sleep(0.8)
+
                 scroll_attempts += 1
             else:
                 break
 
-        logger.info(f"✅ Collected {len(all_links)} links in total")
+        logger.info(f"✅ Collection complete! {len(all_links)} links ready for parallel download")
         return all_links
 
-    async def download_and_analyze_single(self, session, url, filepath, img_number, total_images):
-        """Bitta rasmni yuklab olish va analiz qilish - PARALLEL"""
+    async def download_image_only(self, session, url, filepath, img_number, total_images):
+        """PHASE 2: Faqat rasmni yuklab olish (AI yo'q)"""
         try:
-            logger.info(f"📥 [{img_number}/{total_images}] Downloading: {filepath.name}")
-
             if not isinstance(filepath, Path):
                 filepath = Path(filepath)
 
@@ -513,31 +731,26 @@ class InstagramDownloader:
             try:
                 parent_dir.mkdir(parents=True, exist_ok=True)
             except Exception as mkdir_error:
-                logger.error(f"✗ Failed to create directory: {mkdir_error}")
-                return None, False
+                logger.error(f"✗ [{img_number}/{total_images}] Failed to create directory: {mkdir_error}")
+                return None
 
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as response:
                 if response.status == 200:
                     async with aiofiles.open(filepath, 'wb') as f:
                         await f.write(await response.read())
                     file_size = filepath.stat().st_size / 1024
-                    logger.info(f"✅ [{img_number}/{total_images}] Downloaded {filepath.name} ({file_size:.1f} KB)")
-
-                    logger.info(f"🤖 [{img_number}/{total_images}] Starting AI analysis...")
-                    analysis_task = asyncio.create_task(
-                        self.ai_analyzer.detect_swimwear(filepath, img_number, total_images)
-                    )
-                    return (filepath, analysis_task), True
+                    logger.debug(f"✅ [{img_number}/{total_images}] Downloaded {filepath.name} ({file_size:.1f} KB)")
+                    return filepath
                 else:
                     logger.warning(f"✗ [{img_number}/{total_images}] Failed: HTTP {response.status}")
-                    return None, False
+                    return None
 
         except asyncio.TimeoutError:
             logger.error(f"✗ [{img_number}/{total_images}] Timeout")
-            return None, False
+            return None
         except Exception as e:
             logger.error(f"✗ [{img_number}/{total_images}] Error: {e}")
-            return None, False
+            return None
     
     async def slow_scroll_and_load_posts(self, page, target_count):
         previous_count = 0
@@ -645,120 +858,47 @@ class InstagramDownloader:
                 logger.warning(f"Account @{username} not found or private")
                 return
 
-            logger.info(f"\n🚀 FAST MODE: Collecting all links first, then parallel download + AI analysis!")
-            logger.info("="*60)
+            # ============================================================
+            # PHASE 1: COLLECT IMAGE URLs (ULTRA-FAST SCROLL)
+            # ============================================================
+            logger.info(f"\n{'='*60}")
+            logger.info(f"📋 PHASE 1: Collecting image URLs for @{username}")
+            logger.info(f"{'='*60}")
 
-            all_links = await self.collect_all_post_links(page, max_posts)
+            image_urls = await self.collect_all_post_links(page, max_posts)
 
-            if not all_links:
+            if not image_urls:
                 logger.warning(f"No posts found for @{username}")
                 return
 
-            total_links = len(all_links)
-            logger.info(f"\n⚡ Starting PARALLEL download + AI analysis for {total_links} images!")
-            logger.info(f"{'='*60}\n")
+            total_urls = len(image_urls)
+            logger.info(f"✅ PHASE 1 Complete: {total_urls} image URLs collected!\n")
 
-            downloaded_images = []
-            skipped_videos = 0
+            # ============================================================
+            # PHASE 2: DIRECT URL → AI ANALYSIS (NO DOWNLOAD!)
+            # ============================================================
+            swimwear_count, total_count = await self.analyze_images_batch_from_urls(image_urls, username)
 
-            semaphore = asyncio.Semaphore(5)
-
-            async def download_with_semaphore(url, img_number):
-                async with semaphore:
-                    filename = f"img_{img_number:03d}.jpg"
-                    filepath = user_folder / filename
-                    return await self.download_and_analyze_single(session, url, filepath, img_number, total_links)
-
-            download_tasks = [
-                download_with_semaphore(url, i+1)
-                for i, url in enumerate(all_links)
-            ]
-
-            results = await asyncio.gather(*download_tasks, return_exceptions=True)
-
-            downloaded_count = 0
-            failed_count = 0
-
-            for result in results:
-                if isinstance(result, Exception):
-                    logger.error(f"Download task error: {result}")
-                    failed_count += 1
-                    self.stats['failed_downloads'] += 1
-                elif result is not None:
-                    image_data, success = result
-                    if success and image_data:
-                        downloaded_images.append(image_data)
-                        downloaded_count += 1
-                        self.stats['total_downloads'] += 1
-                    else:
-                        failed_count += 1
-                        self.stats['failed_downloads'] += 1
-                else:
-                    failed_count += 1
-                    self.stats['failed_downloads'] += 1
-            
+            self.stats['total_swimwear_detected'] += swimwear_count
             self.stats['processed_usernames'] += 1
-            logger.info(f"\n{'✅'*30}")
-            logger.info(f"✅ Completed @{username}")
-            logger.info(f"{'✅'*30}")
-            logger.info(f"  📷 Images downloaded: {downloaded_count}")
-            logger.info(f"  🎥 Videos skipped: {skipped_videos}")
-            logger.info(f"  📁 Saved to: {user_folder}")
+
+            logger.info(f"💾 Updating Google Sheets for @{username}...")
+            self.update_count_in_sheet(row_number, swimwear_count, total_count)
+
+            logger.info(f"\n{'='*60}")
+            logger.info(f"🎯 FINAL RESULT for @{username}:")
+            logger.info(f"  🔗 URLs collected: {total_urls}")
+            logger.info(f"  🏊 Swimwear detected: {swimwear_count}/{total_count}")
+            logger.info(f"  📊 Percentage: {(swimwear_count/total_count*100):.1f}%")
+            logger.info(f"  ⚡ NO DOWNLOAD - Direct URL → AI!")
             logger.info(f"{'='*60}\n")
-
-            if downloaded_images:
-                logger.info(f"\n{'='*60}")
-                logger.info(f"🤖 {AI_MODEL.upper()} Analysis Results for @{username}")
-                logger.info(f"(All images were analyzed in parallel)")
-                logger.info(f"{'='*60}")
-
-                swimwear_count, total_count = await self.analyze_images_parallel(downloaded_images, username)
-
-                self.stats['total_swimwear_detected'] += swimwear_count
-
-                logger.info(f"💾 Updating Google Sheets for @{username}...")
-                self.update_count_in_sheet(row_number, swimwear_count, total_count)
-
-                logger.info(f"\n{'='*60}")
-                logger.info(f"🎯 FINAL RESULT for @{username}:")
-                logger.info(f"  🏊 Swimwear Count: {swimwear_count}/{total_count}")
-                logger.info(f"  📊 Percentage: {(swimwear_count/total_count*100):.1f}%")
-                logger.info(f"{'='*60}\n")
-            elif downloaded_count > 0:
-                logger.warning(f"Images were downloaded but no analysis tasks were created for @{username}")
-            else:
-                logger.warning(f"No images were downloaded for @{username}")
 
         except KeyboardInterrupt:
             logger.warning(f"\nUser interrupted processing of @{username}")
-
-            if 'downloaded_images' in locals() and downloaded_images:
-                logger.info(f"Cancelling {len(downloaded_images)} pending analysis tasks...")
-                for filepath, task in downloaded_images:
-                    if not task.done():
-                        task.cancel()
-                        try:
-                            await task
-                        except asyncio.CancelledError:
-                            pass
-                        except Exception:
-                            pass
             raise
 
         except Exception as e:
             logger.error(f"Error processing @{username}: {e}", exc_info=True)
-
-            if 'downloaded_images' in locals() and downloaded_images:
-                logger.warning(f"Cancelling {len(downloaded_images)} pending analysis tasks due to error")
-                for filepath, task in downloaded_images:
-                    if not task.done():
-                        task.cancel()
-                        try:
-                            await task
-                        except asyncio.CancelledError:
-                            pass
-                        except Exception:
-                            pass
     
     async def run(self, max_posts_per_account=MAX_POSTS_PER_ACCOUNT, start_row=2):
         start_time = time.time()
