@@ -437,6 +437,107 @@ class InstagramDownloader:
     async def random_wait(self, min_sec=2, max_sec=4):
         wait_time = random.uniform(min_sec, max_sec)
         await asyncio.sleep(wait_time)
+
+    async def collect_all_post_links(self, page, max_posts):
+        """Avval barcha post linklarini to'plash - TEZKOR!"""
+        logger.info(f"🔍 Collecting up to {max_posts} post links (fast scroll mode)...")
+
+        all_links = []
+        processed_post_captions = set()
+        scroll_attempts = 0
+        max_scroll_attempts = 15
+
+        while len(all_links) < max_posts and scroll_attempts < max_scroll_attempts:
+            posts = await page.locator('.profile-media-list__item').all()
+
+            for post in posts:
+                if len(all_links) >= max_posts:
+                    break
+
+                try:
+                    video_tag = await post.locator('.tags__item--video').count()
+                    is_video = video_tag > 0
+
+                    if is_video:
+                        download_link = await post.locator('img.media-content__image').get_attribute('src')
+                        if not download_link:
+                            continue
+                    else:
+                        download_link = await post.locator('a.button__download').get_attribute('href')
+
+                    if not download_link:
+                        continue
+
+                    try:
+                        caption_elem = await post.locator('.media-content__caption').text_content()
+                        time_elem = await post.locator('.media-content__meta-time').get_attribute('title')
+                        post_identifier = f"{caption_elem[:50]}_{time_elem}"
+                    except:
+                        post_identifier = download_link[:100]
+
+                    if post_identifier in processed_post_captions:
+                        continue
+
+                    processed_post_captions.add(post_identifier)
+                    all_links.append(download_link)
+                    logger.debug(f"✓ Link {len(all_links)}/{max_posts} collected")
+
+                except Exception as e:
+                    logger.debug(f"Error collecting link: {e}")
+                    continue
+
+            if len(all_links) < max_posts:
+                logger.debug(f"Scrolling for more posts... ({len(all_links)}/{max_posts} collected)")
+                current_scroll = await page.evaluate('window.pageYOffset')
+                target_scroll = current_scroll + 1200
+                await page.evaluate(f'window.scrollTo({{top: {target_scroll}, behavior: "smooth"}})')
+                await asyncio.sleep(1.5)
+                scroll_attempts += 1
+            else:
+                break
+
+        logger.info(f"✅ Collected {len(all_links)} links in total")
+        return all_links
+
+    async def download_and_analyze_single(self, session, url, filepath, img_number, total_images):
+        """Bitta rasmni yuklab olish va analiz qilish - PARALLEL"""
+        try:
+            logger.info(f"📥 [{img_number}/{total_images}] Downloading: {filepath.name}")
+
+            if not isinstance(filepath, Path):
+                filepath = Path(filepath)
+
+            filepath = filepath.absolute()
+            parent_dir = filepath.parent
+
+            try:
+                parent_dir.mkdir(parents=True, exist_ok=True)
+            except Exception as mkdir_error:
+                logger.error(f"✗ Failed to create directory: {mkdir_error}")
+                return None, False
+
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                if response.status == 200:
+                    async with aiofiles.open(filepath, 'wb') as f:
+                        await f.write(await response.read())
+                    file_size = filepath.stat().st_size / 1024
+                    logger.info(f"✅ [{img_number}/{total_images}] Downloaded {filepath.name} ({file_size:.1f} KB)")
+
+                    logger.info(f"🤖 [{img_number}/{total_images}] Starting AI analysis...")
+                    analysis_task = asyncio.create_task(
+                        self.ai_analyzer.detect_swimwear(filepath, img_number, total_images)
+                    )
+                    return (filepath, analysis_task), True
+                else:
+                    logger.warning(f"✗ [{img_number}/{total_images}] Failed: HTTP {response.status}")
+                    return None, False
+
+        except asyncio.TimeoutError:
+            logger.error(f"✗ [{img_number}/{total_images}] Timeout")
+            return None, False
+        except Exception as e:
+            logger.error(f"✗ [{img_number}/{total_images}] Error: {e}")
+            return None, False
     
     async def slow_scroll_and_load_posts(self, page, target_count):
         previous_count = 0
@@ -474,30 +575,30 @@ class InstagramDownloader:
         logger.info(f"\n{'='*60}")
         logger.info(f"Processing: @{username}")
         logger.info(f"{'='*60}")
-        
+
         user_folder = self.download_folder / username
         user_folder.mkdir(exist_ok=True)
         logger.debug(f"Folder: {user_folder}")
-        
+
         try:
             logger.info(f"Opening {BASE_URL}...")
             await page.goto(BASE_URL, wait_until='domcontentloaded', timeout=30000)
-            await self.random_wait(2, 3)
-            
+            await asyncio.sleep(1.5)
+
             logger.info(f"Entering username: @{username}")
             input_selector = 'input#search-form-input'
             await page.wait_for_selector(input_selector, timeout=10000)
-            
+
             await page.fill(input_selector, '')
-            await self.random_wait(0.3, 0.5)
-            
+            await asyncio.sleep(0.3)
+
             await page.fill(input_selector, username)
-            await self.random_wait(1.5, 2)
-            
+            await asyncio.sleep(1)
+
             logger.info("Clicking Download button...")
             download_button = 'button.search-form__button[type="submit"]'
             await page.click(download_button)
-            
+
             await asyncio.sleep(2)
 
             logger.debug("Checking for ad modal...")
@@ -506,20 +607,18 @@ class InstagramDownloader:
                 if await close_button.count() > 0:
                     logger.debug("Ad modal detected - clicking close button")
                     await close_button.first.click()
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(0.5)
                     logger.debug("Ad modal closed")
-                else:
-                    logger.debug("No ad modal found")
             except Exception as e:
                 logger.debug(f"Ad modal handling: {e}")
 
-            await asyncio.sleep(1)
-            
+            await asyncio.sleep(0.5)
+
             logger.info("Waiting for results...")
             try:
                 await page.wait_for_selector('.search-result', state='attached', timeout=20000)
-                await asyncio.sleep(2)
-                
+                await asyncio.sleep(1)
+
                 await page.evaluate("""
                     () => {
                         const result = document.querySelector('.search-result');
@@ -528,126 +627,75 @@ class InstagramDownloader:
                             result.style.visibility = 'visible';
                             result.style.opacity = '1';
                         }
-                        
+
                         const modal = document.querySelector('.ad-modal__wrapper');
                         if (modal) {
                             modal.style.display = 'none';
                         }
                     }
                 """)
-                
+
                 await asyncio.sleep(1)
-                await self.random_wait(2, 3)
             except Exception as e:
                 logger.error(f"No results for @{username}: {e}")
                 return
-            
+
             account_exists = await page.locator('.user-info__username').count() > 0
             if not account_exists:
                 logger.warning(f"Account @{username} not found or private")
                 return
-            
-            logger.info(f"Collecting up to {max_posts} images (1 per unique post)...")
-            logger.info(f"📥 Download & AI analysis will run in parallel for speed")
-            logger.info("")
+
+            logger.info(f"\n🚀 FAST MODE: Collecting all links first, then parallel download + AI analysis!")
+            logger.info("="*60)
+
+            all_links = await self.collect_all_post_links(page, max_posts)
+
+            if not all_links:
+                logger.warning(f"No posts found for @{username}")
+                return
+
+            total_links = len(all_links)
+            logger.info(f"\n⚡ Starting PARALLEL download + AI analysis for {total_links} images!")
+            logger.info(f"{'='*60}\n")
+
+            downloaded_images = []
+            skipped_videos = 0
+
+            semaphore = asyncio.Semaphore(5)
+
+            async def download_with_semaphore(url, img_number):
+                async with semaphore:
+                    filename = f"img_{img_number:03d}.jpg"
+                    filepath = user_folder / filename
+                    return await self.download_and_analyze_single(session, url, filepath, img_number, total_links)
+
+            download_tasks = [
+                download_with_semaphore(url, i+1)
+                for i, url in enumerate(all_links)
+            ]
+
+            results = await asyncio.gather(*download_tasks, return_exceptions=True)
 
             downloaded_count = 0
-            skipped_videos = 0
-            processed_post_captions = set()
-            current_scroll_attempt = 0
-            max_scroll_attempts = 20
-            downloaded_images = []
+            failed_count = 0
 
-            while downloaded_count < max_posts and current_scroll_attempt < max_scroll_attempts:
-                posts = await page.locator('.profile-media-list__item').all()
-                total_available = len(posts)
-
-                logger.debug(f"Found {total_available} items, processing for unique posts...")
-
-                found_new_post = False
-
-                for post in posts:
-                    if downloaded_count >= max_posts:
-                        break
-
-                    try:
-                        video_tag = await post.locator('.tags__item--video').count()
-                        is_video = video_tag > 0
-
-                        if is_video:
-                            try:
-                                download_link = await post.locator('img.media-content__image').get_attribute('src')
-                                if download_link:
-                                    logger.debug(f"Video post - using thumbnail image")
-                                    skipped_videos += 1
-                                    self.stats['skipped_videos'] += 1
-                                else:
-                                    logger.debug(f"Video post without thumbnail - skipping")
-                                    continue
-                            except:
-                                logger.debug(f"Could not get thumbnail from video post")
-                                continue
-                        else:
-                            download_link = await post.locator('a.button__download').get_attribute('href')
-
-                        if not download_link:
-                            logger.debug(f"No download link found")
-                            continue
-
-                        try:
-                            caption_elem = await post.locator('.media-content__caption').text_content()
-                            time_elem = await post.locator('.media-content__meta-time').get_attribute('title')
-                            post_identifier = f"{caption_elem[:50]}_{time_elem}"
-                        except:
-                            post_identifier = download_link[:100]
-
-                        if post_identifier in processed_post_captions:
-                            logger.debug(f"Skipping carousel image from already processed post")
-                            continue
-
-                        processed_post_captions.add(post_identifier)
-                        found_new_post = True
-
-                        filename = f"img_{downloaded_count + 1:03d}.jpg"
-                        filepath = user_folder / filename
-
-                        logger.info(f"Downloading image {downloaded_count + 1}/{max_posts}...")
-                        success = await self.download_image(session, download_link, filepath)
-
-                        if success:
-                            downloaded_count += 1
-                            self.stats['total_downloads'] += 1
-
-                            logger.info(f"📷 Image {downloaded_count}: ✅ Downloaded")
-                            logger.info(f"🤖 Starting {AI_MODEL.upper()} analysis in background...")
-                            analysis_task = asyncio.create_task(
-                                self.ai_analyzer.detect_swimwear(filepath, downloaded_count, max_posts)
-                            )
-                            downloaded_images.append((filepath, analysis_task))
-
-                            await asyncio.sleep(0.3)
-                        else:
-                            self.stats['failed_downloads'] += 1
-
-                        await self.random_wait(1.5, 2.5)
-
-                    except Exception as e:
-                        logger.error(f"Error processing post: {e}")
-                        self.stats['failed_downloads'] += 1
-                        continue
-
-                if downloaded_count < max_posts:
-                    if not found_new_post:
-                        logger.debug(f"No new unique posts found, scrolling for more... (attempt {current_scroll_attempt + 1})")
-                        current_scroll = await page.evaluate('window.pageYOffset')
-                        target_scroll = current_scroll + 800
-                        await page.evaluate(f'window.scrollTo({{top: {target_scroll}, behavior: "smooth"}})')
-                        await self.random_wait(2.5, 3.5)
-                        current_scroll_attempt += 1
+            for result in results:
+                if isinstance(result, Exception):
+                    logger.error(f"Download task error: {result}")
+                    failed_count += 1
+                    self.stats['failed_downloads'] += 1
+                elif result is not None:
+                    image_data, success = result
+                    if success and image_data:
+                        downloaded_images.append(image_data)
+                        downloaded_count += 1
+                        self.stats['total_downloads'] += 1
                     else:
-                        current_scroll_attempt = 0
+                        failed_count += 1
+                        self.stats['failed_downloads'] += 1
                 else:
-                    break
+                    failed_count += 1
+                    self.stats['failed_downloads'] += 1
             
             self.stats['processed_usernames'] += 1
             logger.info(f"\n{'✅'*30}")
