@@ -1061,50 +1061,80 @@ class InstagramDownloader:
 
             logger.info("Clicking Download button...")
             download_button = 'button.search-form__button[type="submit"]'
-            await page.click(download_button)
 
-            await asyncio.sleep(2)
+            # Click with retry if needed
+            click_success = False
+            for click_attempt in range(3):
+                try:
+                    await page.click(download_button, timeout=5000)
+                    click_success = True
+                    logger.debug(f"✓ Download button clicked (attempt {click_attempt + 1})")
+                    break
+                except Exception as e:
+                    logger.warning(f"Click attempt {click_attempt + 1} failed: {e}")
+                    if click_attempt < 2:
+                        await asyncio.sleep(1)
 
+            if not click_success:
+                logger.error(f"Failed to click download button for @{username}")
+                return
+
+            # LONGER WAIT - Give site time to process (reduced ad blocking helps!)
+            logger.info("Waiting for site to process request...")
+            await asyncio.sleep(5)  # Increased from 2s to 5s
+
+            # Handle ad modal if present
             logger.debug("Checking for ad modal...")
             try:
                 close_button = page.locator('.ad-modal__close')
                 if await close_button.count() > 0:
                     logger.debug("Ad modal detected - clicking close button")
                     await close_button.first.click()
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(1)
                     logger.debug("Ad modal closed")
             except Exception as e:
                 logger.debug(f"Ad modal handling: {e}")
 
-            await asyncio.sleep(0.5)
+            # Extra wait for results to appear
+            await asyncio.sleep(2)
 
-            logger.info("Waiting for NEW results...")
-            try:
-                # Wait for NEW search results (not old ones)
-                await asyncio.sleep(2)  # Give time for old results to clear
-                await page.wait_for_selector('.search-result', state='attached', timeout=20000)
-                await asyncio.sleep(1)
+            logger.info("Waiting for search results...")
+            # Try multiple times if needed
+            results_found = False
+            for wait_attempt in range(3):
+                try:
+                    await page.wait_for_selector('.search-result', state='attached', timeout=15000)
+                    results_found = True
+                    logger.debug(f"✓ Results appeared (attempt {wait_attempt + 1})")
+                    break
+                except Exception as e:
+                    logger.warning(f"Wait attempt {wait_attempt + 1} failed: {e}")
+                    if wait_attempt < 2:
+                        await asyncio.sleep(3)
 
-                await page.evaluate("""
-                    () => {
-                        const result = document.querySelector('.search-result');
-                        if (result) {
-                            result.style.display = 'block';
-                            result.style.visibility = 'visible';
-                            result.style.opacity = '1';
-                        }
-
-                        const modal = document.querySelector('.ad-modal__wrapper');
-                        if (modal) {
-                            modal.style.display = 'none';
-                        }
-                    }
-                """)
-
-                await asyncio.sleep(1)
-            except Exception as e:
-                logger.error(f"No results for @{username}: {e}")
+            if not results_found:
+                logger.error(f"Site did not respond with results for @{username}")
+                logger.error("Possible reasons: 1) Site overloaded 2) Network issue 3) Account private")
                 return
+
+            # Make results visible
+            await page.evaluate("""
+                () => {
+                    const result = document.querySelector('.search-result');
+                    if (result) {
+                        result.style.display = 'block';
+                        result.style.visibility = 'visible';
+                        result.style.opacity = '1';
+                    }
+
+                    const modal = document.querySelector('.ad-modal__wrapper');
+                    if (modal) {
+                        modal.style.display = 'none';
+                    }
+                }
+            """)
+
+            await asyncio.sleep(2)  # Extra wait for DOM to stabilize
 
             account_exists = await page.locator('.user-info__username').count() > 0
             if not account_exists:
@@ -1224,59 +1254,40 @@ class InstagramDownloader:
                 };
             """)
             
+            # MINIMAL AD BLOCKING - Only block known ad servers, not site functionality!
+            # Too aggressive blocking breaks the site's JavaScript
             ad_block_patterns = [
-                '**/ads/**',
                 '**/doubleclick.net/**',
                 '**/google-analytics.com/**',
                 '**/googletagmanager.com/**',
-                '**/facebook.net/**',
-                '**/analytics/**',
-                '**/*ad*.js',
-                '**/*analytics*.js',
-                '**/*tracking*.js',
                 '**/pagead2.googlesyndication.com/**',
                 '**/adservice.google.com/**',
-                '**/static.ads-twitter.com/**',
-                '**/ads-twitter.com/**',
-                '**/amazon-adsystem.com/**',
-                '**/adnxs.com/**',
-                '**/advertising.com/**',
-                '**/bidswitch.net/**',
-                '**/outbrain.com/**',
-                '**/taboola.com/**',
-                '**/criteo.com/**',
-                '**/pubmatic.com/**',
-                '**/*banner*.js',
-                '**/*sponsor*.js',
-                '**/*popup*.js',
                 '**/googleads.g.doubleclick.net/**',
-                '**/adsbygoogle.js',
-                '**/*adsbygoogle*'
+                # Remove broad patterns like **/*ad*.js - they block site JS!
             ]
-            
+
             for pattern in ad_block_patterns:
                 await context.route(pattern, lambda route: route.abort())
-            
+
+            # MINIMAL DOM ad blocking - don't break site functionality
             await context.add_init_script("""
                 const blockAds = () => {
                     const adSelectors = [
+                        'ins.adsbygoogle[data-ad-client]',
                         'iframe[src*="doubleclick"]',
-                        'iframe[src*="googleads"]',
-                        'iframe[src*="adservice"]',
-                        'ins.adsbygoogle[data-ad-client]'
+                        'iframe[src*="googleads"]'
                     ];
-                    
+
                     adSelectors.forEach(selector => {
                         document.querySelectorAll(selector).forEach(el => {
-                            if (el && el.parentElement) {
-                                el.parentElement.remove();
-                            }
+                            try {
+                                el.remove();
+                            } catch(e) {}
                         });
                     });
                 };
-                
-                setTimeout(blockAds, 2000);
-                setTimeout(blockAds, 4000);
+
+                setTimeout(blockAds, 3000);
             """)
             
             page = await context.new_page()
