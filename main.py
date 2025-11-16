@@ -794,9 +794,18 @@ class InstagramDownloader:
         logger.debug(f"Folder: {user_folder}")
 
         try:
+            # CRITICAL: Reload page to clear old search results
             logger.info(f"Opening {BASE_URL}...")
-            await page.goto(BASE_URL, wait_until='domcontentloaded', timeout=30000)
-            await asyncio.sleep(1.5)
+            await page.goto(BASE_URL, wait_until='networkidle', timeout=30000)
+            await asyncio.sleep(2)
+
+            # Remove any existing search results from DOM
+            await page.evaluate("""
+                () => {
+                    const oldResults = document.querySelectorAll('.search-result');
+                    oldResults.forEach(el => el.remove());
+                }
+            """)
 
             logger.info(f"Entering username: @{username}")
             input_selector = 'input#search-form-input'
@@ -827,8 +836,10 @@ class InstagramDownloader:
 
             await asyncio.sleep(0.5)
 
-            logger.info("Waiting for results...")
+            logger.info("Waiting for NEW results...")
             try:
+                # Wait for NEW search results (not old ones)
+                await asyncio.sleep(2)  # Give time for old results to clear
                 await page.wait_for_selector('.search-result', state='attached', timeout=20000)
                 await asyncio.sleep(1)
 
