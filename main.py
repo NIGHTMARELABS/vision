@@ -442,87 +442,105 @@ class InstagramDownloader:
         await asyncio.sleep(wait_time)
 
     async def collect_all_post_links(self, page, max_posts):
-        """Avval barcha post linklarini to'plash - ULTRA TEZKOR!"""
-        logger.info(f"🔍 Collecting up to {max_posts} post links (TURBO scroll mode)...")
+        """Avval barcha post linklarini to'plash - SUPER OPTIMIZED!"""
+        logger.info(f"🔍 Collecting up to {max_posts} post links (ULTRA-FAST scroll mode)...")
 
         all_links = []
-        processed_post_captions = set()
+        processed_post_indices = set()
         scroll_attempts = 0
         max_scroll_attempts = 20
-        previous_count = 0
+        previous_links_count = 0
         stale_scroll_count = 0
+        last_processed_index = 0
 
         while len(all_links) < max_posts and scroll_attempts < max_scroll_attempts:
+            # Get all posts currently on page
             posts = await page.locator('.profile-media-list__item').all()
+            total_posts_on_page = len(posts)
 
-            for post in posts:
+            # OPTIMIZATION: Only process NEW posts (not already processed)
+            new_posts_found = 0
+            for idx in range(last_processed_index, total_posts_on_page):
+                # Stop immediately if we have enough links
                 if len(all_links) >= max_posts:
+                    logger.info(f"🎯 Target reached! Got {len(all_links)}/{max_posts} posts")
                     break
 
+                # Skip if already processed
+                if idx in processed_post_indices:
+                    continue
+
+                post = posts[idx]
+                processed_post_indices.add(idx)
+
                 try:
+                    # Get unique post identifier (time is most reliable)
+                    try:
+                        time_elem = await post.locator('.media-content__meta-time').get_attribute('title')
+                        post_identifier = time_elem
+                    except:
+                        post_identifier = f"post_{idx}"
+
+                    # Get download link
                     video_tag = await post.locator('.tags__item--video').count()
                     is_video = video_tag > 0
 
                     if is_video:
                         download_link = await post.locator('img.media-content__image').get_attribute('src')
-                        if not download_link:
-                            continue
                     else:
                         download_link = await post.locator('a.button__download').get_attribute('href')
 
                     if not download_link:
+                        logger.debug(f"No download link for post {idx}")
                         continue
 
-                    try:
-                        caption_elem = await post.locator('.media-content__caption').text_content()
-                        time_elem = await post.locator('.media-content__meta-time').get_attribute('title')
-                        post_identifier = f"{caption_elem[:50]}_{time_elem}"
-                    except:
-                        post_identifier = download_link[:100]
-
-                    if post_identifier in processed_post_captions:
-                        continue
-
-                    processed_post_captions.add(post_identifier)
                     all_links.append(download_link)
+                    new_posts_found += 1
+                    logger.debug(f"✓ Link {len(all_links)}/{max_posts} collected from post {idx}")
 
                 except Exception as e:
-                    logger.debug(f"Error collecting link: {e}")
+                    logger.debug(f"Error collecting link from post {idx}: {e}")
                     continue
+
+            # Update last processed index
+            last_processed_index = total_posts_on_page
+
+            # Check if we got enough links
+            if len(all_links) >= max_posts:
+                logger.info(f"✅ Collection complete! Got {len(all_links)} posts")
+                break
 
             # Real-time progress logging
             current_count = len(all_links)
-            if current_count != previous_count:
-                logger.info(f"📊 Progress: {current_count}/{max_posts} posts collected (+{current_count - previous_count} new)")
-                previous_count = current_count
+            if current_count != previous_links_count:
+                logger.info(f"📊 Progress: {current_count}/{max_posts} posts collected (+{current_count - previous_links_count} new) | {total_posts_on_page} posts on page")
+                previous_links_count = current_count
                 stale_scroll_count = 0
             else:
                 stale_scroll_count += 1
 
+            # Smart scroll decision
             if len(all_links) < max_posts:
-                # Smart scroll strategy
-                current_scroll = await page.evaluate('window.pageYOffset')
+                # Check if we need more posts
+                if stale_scroll_count > 2:
+                    logger.info(f"⚠️  No new links after {stale_scroll_count} scrolls. Stopping (might be end of content)")
+                    break
 
-                # Bigger scroll jumps for faster loading
+                # Calculate scroll
+                current_scroll = await page.evaluate('window.pageYOffset')
                 scroll_distance = 1500 if stale_scroll_count < 2 else 800
                 target_scroll = current_scroll + scroll_distance
 
-                # Use instant scroll instead of smooth for speed
+                # Instant scroll
                 await page.evaluate(f'window.scrollTo({{top: {target_scroll}, behavior: "instant"}})')
 
-                # Adaptive wait time - faster if posts are loading
+                # Adaptive wait time
                 if stale_scroll_count == 0:
-                    # Posts are loading fast, minimal wait
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(0.25)
                 elif stale_scroll_count == 1:
-                    # Slowing down, wait a bit more
-                    await asyncio.sleep(0.6)
+                    await asyncio.sleep(0.5)
                 else:
-                    # No new posts, wait longer for page to load
-                    await asyncio.sleep(1.0)
-                    if stale_scroll_count > 3:
-                        logger.info(f"⚠️  No new posts after {stale_scroll_count} scrolls, might be end of content")
-                        break
+                    await asyncio.sleep(0.8)
 
                 scroll_attempts += 1
             else:
