@@ -70,39 +70,10 @@ async def quick_test():
                 get: () => undefined
             });
         """)
-        
-        ad_patterns = [
-            '**/ads/**', '**/doubleclick.net/**', '**/google-analytics.com/**',
-            '**/googletagmanager.com/**', '**/facebook.net/**', '**/analytics/**',
-            '**/*ad*.js', '**/*analytics*.js', '**/*tracking*.js',
-            '**/googleads.g.doubleclick.net/**', '**/adsbygoogle.js', '**/*adsbygoogle*'
-        ]
-        
-        for pattern in ad_patterns:
-            await context.route(pattern, lambda route: route.abort())
-        
-        await context.add_init_script("""
-            const blockAds = () => {
-                const adSelectors = [
-                    'iframe[src*="doubleclick"]',
-                    'iframe[src*="googleads"]',
-                    'iframe[src*="adservice"]',
-                    'ins.adsbygoogle[data-ad-client]'
-                ];
-                
-                adSelectors.forEach(selector => {
-                    document.querySelectorAll(selector).forEach(el => {
-                        if (el && el.parentElement) {
-                            el.parentElement.remove();
-                        }
-                    });
-                });
-            };
-            
-            setTimeout(blockAds, 2000);
-            setTimeout(blockAds, 4000);
-        """)
-        
+
+        # NO AD BLOCKING - AdGuard Chrome extension handles all ad blocking
+        # Code-based ad blocking was interfering with site functionality
+
         page = await context.new_page()
         
         async with aiohttp.ClientSession() as session:

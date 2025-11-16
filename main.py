@@ -1253,43 +1253,10 @@ class InstagramDownloader:
                     runtime: {}
                 };
             """)
-            
-            # MINIMAL AD BLOCKING - Only block known ad servers, not site functionality!
-            # Too aggressive blocking breaks the site's JavaScript
-            ad_block_patterns = [
-                '**/doubleclick.net/**',
-                '**/google-analytics.com/**',
-                '**/googletagmanager.com/**',
-                '**/pagead2.googlesyndication.com/**',
-                '**/adservice.google.com/**',
-                '**/googleads.g.doubleclick.net/**',
-                # Remove broad patterns like **/*ad*.js - they block site JS!
-            ]
 
-            for pattern in ad_block_patterns:
-                await context.route(pattern, lambda route: route.abort())
+            # NO AD BLOCKING - AdGuard Chrome extension handles all ad blocking
+            # Code-based ad blocking was interfering with site functionality
 
-            # MINIMAL DOM ad blocking - don't break site functionality
-            await context.add_init_script("""
-                const blockAds = () => {
-                    const adSelectors = [
-                        'ins.adsbygoogle[data-ad-client]',
-                        'iframe[src*="doubleclick"]',
-                        'iframe[src*="googleads"]'
-                    ];
-
-                    adSelectors.forEach(selector => {
-                        document.querySelectorAll(selector).forEach(el => {
-                            try {
-                                el.remove();
-                            } catch(e) {}
-                        });
-                    });
-                };
-
-                setTimeout(blockAds, 3000);
-            """)
-            
             page = await context.new_page()
             
             async with aiohttp.ClientSession() as session:
