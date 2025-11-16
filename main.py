@@ -1038,8 +1038,9 @@ class InstagramDownloader:
         try:
             # CRITICAL: Reload page to clear old search results
             logger.info(f"Opening {BASE_URL}...")
-            await page.goto(BASE_URL, wait_until='networkidle', timeout=30000)
-            await asyncio.sleep(2)
+            # Use domcontentloaded instead of networkidle - ads keep loading forever!
+            await page.goto(BASE_URL, wait_until='domcontentloaded', timeout=30000)
+            await asyncio.sleep(3)  # Wait for JavaScript to initialize
 
             # Remove any existing search results from DOM
             await page.evaluate("""
