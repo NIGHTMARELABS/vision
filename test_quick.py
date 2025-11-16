@@ -66,13 +66,21 @@ async def quick_test():
         )
         
         await context.add_init_script("""
+            // Anti-detection
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => undefined
             });
-        """)
 
-        # NO AD BLOCKING - AdGuard Chrome extension handles all ad blocking
-        # Code-based ad blocking was interfering with site functionality
+            // CRITICAL: Stub adsbygoogle to prevent errors that break site functionality
+            window.adsbygoogle = window.adsbygoogle || [];
+            window.adsbygoogle.push = function() {
+                try {
+                    return 0;
+                } catch(e) {
+                    return 0;
+                }
+            };
+        """)
 
         page = await context.new_page()
         

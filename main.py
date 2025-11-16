@@ -1240,6 +1240,7 @@ class InstagramDownloader:
             context = await browser.new_context(**context_options)
             
             await context.add_init_script("""
+                // Anti-detection
                 Object.defineProperty(navigator, 'webdriver', {
                     get: () => undefined
                 });
@@ -1252,10 +1253,23 @@ class InstagramDownloader:
                 window.chrome = {
                     runtime: {}
                 };
-            """)
 
-            # NO AD BLOCKING - AdGuard Chrome extension handles all ad blocking
-            # Code-based ad blocking was interfering with site functionality
+                // CRITICAL: Stub adsbygoogle to prevent errors that break site functionality
+                // The site's app.js crashes if adsbygoogle.push() throws errors
+                window.adsbygoogle = window.adsbygoogle || [];
+
+                // Override push to do nothing (prevents errors)
+                const originalPush = window.adsbygoogle.push;
+                window.adsbygoogle.push = function() {
+                    try {
+                        // Silently ignore - don't call original which would throw errors
+                        return 0;
+                    } catch(e) {
+                        // Suppress all errors
+                        return 0;
+                    }
+                };
+            """)
 
             page = await context.new_page()
             
