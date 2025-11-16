@@ -1224,7 +1224,21 @@ class InstagramDownloader:
 
             context_options = {
                 'viewport': {'width': 1920, 'height': 1080},
-                'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'locale': 'en-US',
+                'timezone_id': 'America/New_York',
+                'extra_http_headers': {
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'DNT': '1',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1',
+                    'Sec-Fetch-Dest': 'document',
+                    'Sec-Fetch-Mode': 'navigate',
+                    'Sec-Fetch-Site': 'none',
+                    'Sec-Fetch-User': '?1',
+                    'Cache-Control': 'max-age=0'
+                }
             }
 
             if self.proxy_manager:
@@ -1240,22 +1254,83 @@ class InstagramDownloader:
             context = await browser.new_context(**context_options)
             
             await context.add_init_script("""
-                // Anti-detection
+                // ULTRA STEALTH MODE - Advanced anti-bot detection
+
+                // 1. Remove webdriver traces
                 Object.defineProperty(navigator, 'webdriver', {
                     get: () => undefined
                 });
+
+                // 2. Override navigator properties to look like real Chrome
                 Object.defineProperty(navigator, 'plugins', {
                     get: () => [1, 2, 3, 4, 5]
                 });
+
                 Object.defineProperty(navigator, 'languages', {
                     get: () => ['en-US', 'en']
                 });
+
+                // 3. Complete Chrome runtime object
                 window.chrome = {
-                    runtime: {}
+                    runtime: {},
+                    loadTimes: function() {},
+                    csi: function() {},
+                    app: {}
                 };
 
+                // 4. Permissions API mock
+                const originalQuery = window.navigator.permissions.query;
+                window.navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications' ?
+                        Promise.resolve({ state: Notification.permission }) :
+                        originalQuery(parameters)
+                );
+
+                // 5. Media devices
+                Object.defineProperty(navigator, 'mediaDevices', {
+                    get: () => ({
+                        enumerateDevices: () => Promise.resolve([]),
+                        getUserMedia: () => Promise.reject(new Error('Not allowed'))
+                    })
+                });
+
+                // 6. Platform and hardware concurrency
+                Object.defineProperty(navigator, 'platform', {
+                    get: () => 'Win32'
+                });
+
+                Object.defineProperty(navigator, 'hardwareConcurrency', {
+                    get: () => 8
+                });
+
+                // 7. Device memory
+                Object.defineProperty(navigator, 'deviceMemory', {
+                    get: () => 8
+                });
+
+                // 8. Battery API
+                Object.defineProperty(navigator, 'getBattery', {
+                    get: () => () => Promise.resolve({
+                        charging: true,
+                        chargingTime: 0,
+                        dischargingTime: Infinity,
+                        level: 1
+                    })
+                });
+
+                // 9. Screen properties for real display
+                Object.defineProperty(screen, 'availWidth', { get: () => 1920 });
+                Object.defineProperty(screen, 'availHeight', { get: () => 1040 });
+                Object.defineProperty(screen, 'width', { get: () => 1920 });
+                Object.defineProperty(screen, 'height', { get: () => 1080 });
+                Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
+                Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
+
+                // 10. Window outer dimensions
+                window.outerWidth = 1920;
+                window.outerHeight = 1080;
+
                 // CRITICAL: Comprehensive ad blocking to prevent site breakage
-                // Override all ad-related objects BEFORE page scripts load
 
                 // 1. Stub adsbygoogle
                 window.adsbygoogle = [];
@@ -1277,19 +1352,15 @@ class InstagramDownloader:
                 // 4. Remove ad elements from DOM continuously
                 const cleanAds = () => {
                     try {
-                        // Remove ad iframes
                         document.querySelectorAll('iframe[src*="doubleclick"], iframe[src*="google"], iframe[src*="ads"]').forEach(el => {
                             try { el.remove(); } catch(e) {}
                         });
-
-                        // Remove ad containers
                         document.querySelectorAll('ins.adsbygoogle, [data-ad-client], .adsbygoogle').forEach(el => {
                             try { el.remove(); } catch(e) {}
                         });
                     } catch(e) {}
                 };
 
-                // Run immediately and periodically
                 if (document.readyState === 'loading') {
                     document.addEventListener('DOMContentLoaded', cleanAds);
                 } else {
