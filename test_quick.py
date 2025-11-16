@@ -66,43 +66,53 @@ async def quick_test():
         )
         
         await context.add_init_script("""
+            // Anti-detection
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => undefined
             });
-        """)
-        
-        ad_patterns = [
-            '**/ads/**', '**/doubleclick.net/**', '**/google-analytics.com/**',
-            '**/googletagmanager.com/**', '**/facebook.net/**', '**/analytics/**',
-            '**/*ad*.js', '**/*analytics*.js', '**/*tracking*.js',
-            '**/googleads.g.doubleclick.net/**', '**/adsbygoogle.js', '**/*adsbygoogle*'
-        ]
-        
-        for pattern in ad_patterns:
-            await context.route(pattern, lambda route: route.abort())
-        
-        await context.add_init_script("""
-            const blockAds = () => {
-                const adSelectors = [
-                    'iframe[src*="doubleclick"]',
-                    'iframe[src*="googleads"]',
-                    'iframe[src*="adservice"]',
-                    'ins.adsbygoogle[data-ad-client]'
-                ];
-                
-                adSelectors.forEach(selector => {
-                    document.querySelectorAll(selector).forEach(el => {
-                        if (el && el.parentElement) {
-                            el.parentElement.remove();
-                        }
+
+            // CRITICAL: Comprehensive ad blocking
+            window.adsbygoogle = [];
+            Object.defineProperty(window, 'adsbygoogle', {
+                configurable: false,
+                get: function() { return []; },
+                set: function() {}
+            });
+
+            window.googletag = window.googletag || {};
+            window.googletag.cmd = window.googletag.cmd || [];
+            window.googletag.cmd.push = function() { return 1; };
+
+            window.ga = function() {};
+            window.gtag = function() {};
+
+            const cleanAds = () => {
+                try {
+                    document.querySelectorAll('iframe[src*="doubleclick"], iframe[src*="google"], iframe[src*="ads"]').forEach(el => {
+                        try { el.remove(); } catch(e) {}
                     });
-                });
+                    document.querySelectorAll('ins.adsbygoogle, [data-ad-client], .adsbygoogle').forEach(el => {
+                        try { el.remove(); } catch(e) {}
+                    });
+                } catch(e) {}
             };
-            
-            setTimeout(blockAds, 2000);
-            setTimeout(blockAds, 4000);
+
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', cleanAds);
+            } else {
+                cleanAds();
+            }
+            setInterval(cleanAds, 1000);
         """)
-        
+
+        # Block ad network requests
+        await context.route('**/*doubleclick*/**', lambda route: route.abort())
+        await context.route('**/*googleads*/**', lambda route: route.abort())
+        await context.route('**/*google-analytics*/**', lambda route: route.abort())
+        await context.route('**/*googletagmanager*/**', lambda route: route.abort())
+        await context.route('**/*fundingchoices*/**', lambda route: route.abort())
+        await context.route('**/pagead/**', lambda route: route.abort())
+
         page = await context.new_page()
         
         async with aiohttp.ClientSession() as session:
