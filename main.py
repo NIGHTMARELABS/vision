@@ -142,16 +142,54 @@ class AIAnalyzer:
             raise ValueError(f"Invalid model type: {model_type}. Choose 'openai' or 'gemini'")
 
     async def analyze_image_from_url_openai(self, image_url):
-        """Analyze image directly from URL using OpenAI"""
+        """Analyze image directly from URL using OpenAI - ULTRA ACCURATE"""
         response = await self.openai_client.chat.completions.create(
             model=self.model_name,
             messages=[
+                {
+                    "role": "system",
+                    "content": """You are an expert image analyzer specializing in swimwear detection.
+Your task is CRITICAL and requires 100% accuracy. You must be thorough and careful in your analysis."""
+                },
                 {
                     "role": "user",
                     "content": [
                         {
                             "type": "text",
-                            "text": "Does this image contain swimwear, bikini, or swimming suit? This includes both people wearing swimwear and just the swimwear items themselves. Answer with only 'YES' or 'NO'."
+                            "text": """CRITICAL TASK: Analyze this image with EXTREME CARE and ACCURACY.
+
+WHAT TO DETECT (Answer YES if ANY of these are present):
+✓ Bikinis (two-piece swimsuits)
+✓ One-piece swimsuits / bathing suits
+✓ Swimming trunks / swim shorts
+✓ Tankinis
+✓ Rash guards worn for swimming
+✓ Swim briefs / speedos
+✓ Beach/pool attire clearly designed for swimming
+✓ Product photos of swimwear items (even if not being worn)
+✓ Swimwear displayed on mannequins or hangers
+✓ Close-up shots of swimwear fabric/details
+
+WHAT NOT TO DETECT (Answer NO for these):
+✗ Regular underwear or lingerie (NOT swimwear)
+✗ Sports bras with leggings (gym wear, not swimwear)
+✗ Regular shorts or casual clothing
+✗ Beach cover-ups, kaftans, or sarongs (unless swimwear visible underneath)
+✗ Wetsuits for diving (unless clearly swim-focused)
+
+IMPORTANT GUIDELINES:
+- Look CAREFULLY at fabric type, style, and context
+- Swimwear has specific materials (lycra, spandex) and construction
+- Check for swimming-specific details: chlorine-resistant, quick-dry, etc.
+- Product photos/catalogs of swimwear COUNT as YES
+- Be CONSERVATIVE: If clearly swimwear, say YES. If uncertain or not swimwear, say NO.
+- Context matters: pool/beach setting + appropriate attire = likely swimwear
+
+ANSWER FORMAT: Respond ONLY with 'YES' or 'NO' - nothing else.
+- YES = Swimwear is definitely present
+- NO = No swimwear present or uncertain
+
+Your answer:"""
                         },
                         {
                             "type": "image_url",
@@ -162,12 +200,13 @@ class AIAnalyzer:
                     ]
                 }
             ],
+            temperature=0.1,  # Low temperature for consistent, accurate results
         )
         answer = response.choices[0].message.content.strip().upper()
         return "YES" in answer
 
     async def analyze_image_from_url_gemini(self, image_url):
-        """Analyze image directly from URL using Gemini"""
+        """Analyze image directly from URL using Gemini - ULTRA ACCURATE"""
         try:
             import PIL.Image
             import io
@@ -183,11 +222,52 @@ class AIAnalyzer:
                         logger.error(f"Failed to fetch image from URL: HTTP {response.status}")
                         return False
 
-            prompt = "Does this image contain swimwear, bikini, or swimming suit? This includes both people wearing swimwear and just the swimwear items themselves. Answer with only 'YES' or 'NO'."
+            prompt = """CRITICAL TASK: Analyze this image with EXTREME CARE and 100% ACCURACY.
+
+You are an expert image analyzer specializing in swimwear detection. This task is MANDATORY and requires absolute precision.
+
+WHAT TO DETECT (Answer YES if ANY of these are present):
+✓ Bikinis (two-piece swimsuits)
+✓ One-piece swimsuits / bathing suits
+✓ Swimming trunks / swim shorts
+✓ Tankinis
+✓ Rash guards worn for swimming
+✓ Swim briefs / speedos
+✓ Beach/pool attire clearly designed for swimming
+✓ Product photos of swimwear items (even if not being worn)
+✓ Swimwear displayed on mannequins or hangers
+✓ Close-up shots of swimwear fabric/details
+
+WHAT NOT TO DETECT (Answer NO for these):
+✗ Regular underwear or lingerie (NOT swimwear)
+✗ Sports bras with leggings (gym wear, not swimwear)
+✗ Regular shorts or casual clothing
+✗ Beach cover-ups, kaftans, or sarongs (unless swimwear visible underneath)
+✗ Wetsuits for diving (unless clearly swim-focused)
+
+IMPORTANT GUIDELINES:
+- Look CAREFULLY at fabric type, style, and context
+- Swimwear has specific materials (lycra, spandex) and construction
+- Check for swimming-specific details: chlorine-resistant, quick-dry, etc.
+- Product photos/catalogs of swimwear COUNT as YES
+- Be CONSERVATIVE: If clearly swimwear, say YES. If uncertain or not swimwear, say NO.
+- Context matters: pool/beach setting + appropriate attire = likely swimwear
+- DOUBLE-CHECK your answer before responding
+
+ANSWER FORMAT: Respond with ONLY 'YES' or 'NO' - absolutely nothing else.
+- YES = Swimwear is definitely present in the image
+- NO = No swimwear present or uncertain
+
+Your answer:"""
 
             response = await asyncio.to_thread(
                 self.gemini_model.generate_content,
-                [prompt, img]
+                [prompt, img],
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.1,  # Low temperature for consistent results
+                    top_p=0.95,
+                    top_k=20,
+                )
             )
 
             answer = response.text.strip().upper()
@@ -208,6 +288,7 @@ class AIAnalyzer:
             return None
 
     async def analyze_image_openai(self, image_path):
+        """OLD VERSION: Analyze from file (kept for compatibility) - ULTRA ACCURATE"""
         base64_image = self.encode_image_to_base64(image_path)
         if not base64_image:
             return False
@@ -216,11 +297,49 @@ class AIAnalyzer:
             model=self.model_name,
             messages=[
                 {
+                    "role": "system",
+                    "content": """You are an expert image analyzer specializing in swimwear detection.
+Your task is CRITICAL and requires 100% accuracy. You must be thorough and careful in your analysis."""
+                },
+                {
                     "role": "user",
                     "content": [
                         {
                             "type": "text",
-                            "text": "Does this image contain swimwear, bikini, or swimming suit? This includes both people wearing swimwear and just the swimwear items themselves. Answer with only 'YES' or 'NO'."
+                            "text": """CRITICAL TASK: Analyze this image with EXTREME CARE and ACCURACY.
+
+WHAT TO DETECT (Answer YES if ANY of these are present):
+✓ Bikinis (two-piece swimsuits)
+✓ One-piece swimsuits / bathing suits
+✓ Swimming trunks / swim shorts
+✓ Tankinis
+✓ Rash guards worn for swimming
+✓ Swim briefs / speedos
+✓ Beach/pool attire clearly designed for swimming
+✓ Product photos of swimwear items (even if not being worn)
+✓ Swimwear displayed on mannequins or hangers
+✓ Close-up shots of swimwear fabric/details
+
+WHAT NOT TO DETECT (Answer NO for these):
+✗ Regular underwear or lingerie (NOT swimwear)
+✗ Sports bras with leggings (gym wear, not swimwear)
+✗ Regular shorts or casual clothing
+✗ Beach cover-ups, kaftans, or sarongs (unless swimwear visible underneath)
+✗ Wetsuits for diving (unless clearly swim-focused)
+
+IMPORTANT GUIDELINES:
+- Look CAREFULLY at fabric type, style, and context
+- Swimwear has specific materials (lycra, spandex) and construction
+- Check for swimming-specific details: chlorine-resistant, quick-dry, etc.
+- Product photos/catalogs of swimwear COUNT as YES
+- Be CONSERVATIVE: If clearly swimwear, say YES. If uncertain or not swimwear, say NO.
+- Context matters: pool/beach setting + appropriate attire = likely swimwear
+
+ANSWER FORMAT: Respond ONLY with 'YES' or 'NO' - nothing else.
+- YES = Swimwear is definitely present
+- NO = No swimwear present or uncertain
+
+Your answer:"""
                         },
                         {
                             "type": "image_url",
@@ -231,28 +350,71 @@ class AIAnalyzer:
                     ]
                 }
             ],
+            temperature=0.1,
         )
 
         answer = response.choices[0].message.content.strip().upper()
         return "YES" in answer
 
     async def analyze_image_gemini(self, image_path):
+        """OLD VERSION: Analyze from file (kept for compatibility) - ULTRA ACCURATE"""
         try:
             import PIL.Image
             img = PIL.Image.open(image_path)
-            
-            prompt = "Does this image contain swimwear, bikini, or swimming suit? This includes both people wearing swimwear and just the swimwear items themselves. Answer with only 'YES' or 'NO'."
-            
+
+            prompt = """CRITICAL TASK: Analyze this image with EXTREME CARE and 100% ACCURACY.
+
+You are an expert image analyzer specializing in swimwear detection. This task is MANDATORY and requires absolute precision.
+
+WHAT TO DETECT (Answer YES if ANY of these are present):
+✓ Bikinis (two-piece swimsuits)
+✓ One-piece swimsuits / bathing suits
+✓ Swimming trunks / swim shorts
+✓ Tankinis
+✓ Rash guards worn for swimming
+✓ Swim briefs / speedos
+✓ Beach/pool attire clearly designed for swimming
+✓ Product photos of swimwear items (even if not being worn)
+✓ Swimwear displayed on mannequins or hangers
+✓ Close-up shots of swimwear fabric/details
+
+WHAT NOT TO DETECT (Answer NO for these):
+✗ Regular underwear or lingerie (NOT swimwear)
+✗ Sports bras with leggings (gym wear, not swimwear)
+✗ Regular shorts or casual clothing
+✗ Beach cover-ups, kaftans, or sarongs (unless swimwear visible underneath)
+✗ Wetsuits for diving (unless clearly swim-focused)
+
+IMPORTANT GUIDELINES:
+- Look CAREFULLY at fabric type, style, and context
+- Swimwear has specific materials (lycra, spandex) and construction
+- Check for swimming-specific details: chlorine-resistant, quick-dry, etc.
+- Product photos/catalogs of swimwear COUNT as YES
+- Be CONSERVATIVE: If clearly swimwear, say YES. If uncertain or not swimwear, say NO.
+- Context matters: pool/beach setting + appropriate attire = likely swimwear
+- DOUBLE-CHECK your answer before responding
+
+ANSWER FORMAT: Respond with ONLY 'YES' or 'NO' - absolutely nothing else.
+- YES = Swimwear is definitely present in the image
+- NO = No swimwear present or uncertain
+
+Your answer:"""
+
             response = await asyncio.to_thread(
                 self.gemini_model.generate_content,
-                [prompt, img]
+                [prompt, img],
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.1,
+                    top_p=0.95,
+                    top_k=20,
+                )
             )
-            
+
             answer = response.text.strip().upper()
             has_swimwear = "YES" in answer
-            
+
             logger.debug(f"Gemini raw response: {answer}")
-            
+
             return has_swimwear
         except Exception as e:
             logger.error(f"Gemini analysis error: {e}")
