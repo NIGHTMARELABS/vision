@@ -71,16 +71,47 @@ async def quick_test():
                 get: () => undefined
             });
 
-            // CRITICAL: Stub adsbygoogle to prevent errors that break site functionality
-            window.adsbygoogle = window.adsbygoogle || [];
-            window.adsbygoogle.push = function() {
+            // CRITICAL: Comprehensive ad blocking
+            window.adsbygoogle = [];
+            Object.defineProperty(window, 'adsbygoogle', {
+                configurable: false,
+                get: function() { return []; },
+                set: function() {}
+            });
+
+            window.googletag = window.googletag || {};
+            window.googletag.cmd = window.googletag.cmd || [];
+            window.googletag.cmd.push = function() { return 1; };
+
+            window.ga = function() {};
+            window.gtag = function() {};
+
+            const cleanAds = () => {
                 try {
-                    return 0;
-                } catch(e) {
-                    return 0;
-                }
+                    document.querySelectorAll('iframe[src*="doubleclick"], iframe[src*="google"], iframe[src*="ads"]').forEach(el => {
+                        try { el.remove(); } catch(e) {}
+                    });
+                    document.querySelectorAll('ins.adsbygoogle, [data-ad-client], .adsbygoogle').forEach(el => {
+                        try { el.remove(); } catch(e) {}
+                    });
+                } catch(e) {}
             };
+
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', cleanAds);
+            } else {
+                cleanAds();
+            }
+            setInterval(cleanAds, 1000);
         """)
+
+        # Block ad network requests
+        await context.route('**/*doubleclick*/**', lambda route: route.abort())
+        await context.route('**/*googleads*/**', lambda route: route.abort())
+        await context.route('**/*google-analytics*/**', lambda route: route.abort())
+        await context.route('**/*googletagmanager*/**', lambda route: route.abort())
+        await context.route('**/*fundingchoices*/**', lambda route: route.abort())
+        await context.route('**/pagead/**', lambda route: route.abort())
 
         page = await context.new_page()
         
